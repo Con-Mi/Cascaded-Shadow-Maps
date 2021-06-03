@@ -162,6 +162,14 @@ public:
         glUniformMatrix4fv(glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, &mat[0][0]);
     }
 
+    void setMultMat4(const std::string &name, const std::vector<glm::mat4> vctrOfMat, int Nr) const
+    {
+        for (const glm::mat4& mat : vctrOfMat)
+        {
+            glUniformMatrix4fv(glGetUniformLocation(ID, name.c_str()), Nr, GL_FALSE, &mat[0][0]);
+        }
+    }
+
 private:
     void checkCompileErrors(GLuint shader, const std::string& type)
     {
