@@ -243,7 +243,7 @@ void renderQuad()
         glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
         glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices, GL_STATIC_DRAW);
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5*sizeof(float), (void*)0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5*sizeof(float), nullptr);
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5*sizeof(float), (void*)(3*sizeof(float)));
     }
@@ -295,9 +295,9 @@ int main() {
     float lambda = 0.5f;
     float n      = 1.0f;
     //float f      = 100000.0f;
-    float f      = 7.5f;        //  The value that works is 7.5f
+    float f      = 10.0f;        //  The value that works is 7.5f
     const float m      = 6.0f;        //  Number of Cascades
-    float C[static_cast<int>(m)];
+    float C[static_cast<int>(m)+1];
     C[0]         = n;
     C[static_cast<int>(m)+1] = f;
 
@@ -333,48 +333,56 @@ int main() {
 
     //  Configure Depth Map FBO
     const unsigned int SHADOW_WIDTH = 2048, SHADOW_HEIGHT = 2048;
-    unsigned int depthMapFBO;
-    glGenFramebuffers(1, &depthMapFBO);
+    GLuint depthMapFBO[static_cast<GLint>(m)];
+    glGenFramebuffers(static_cast<GLint>(m), depthMapFBO);
+    //unsigned int depthMapFBO;
+    //glGenFramebuffers(1, &depthMapFBO);
 
     //  Create depth texture
     GLuint depthMap[static_cast<GLint>(m)];
     glGenTextures(static_cast<GLint>(m), depthMap);
-    for ( unsigned int i = 0; i < static_cast<unsigned int>(m); ++i )
-    {
+    for ( unsigned int i = 0; i < static_cast<unsigned int>(m); ++i ) {
         glBindTexture(GL_TEXTURE_2D, depthMap[i]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT,
+                     nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
         float borderColor[] = {1.0, 1.0, 1.0, 1.0};
         glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
-    }
-    //glBindTexture(GL_TEXTURE_2D, depthMap);
-    //glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    //float borderColor[] = {1.0, 1.0, 1.0, 1.0};
-    //glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
 
-    //  Attach depth texture as FBOs depth buffer
-    glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthMap[0], 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        //  Attach depth texture as FBOs depth buffer
+        glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthMap[i], 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
 
     //  Shader Configuration
     shader.use();
     shader.setInt("diffuseTexture", 0);
     shader.setInt("shadowMap", 1);
     debugDepthQuad.use();
-    debugDepthQuad.setInt("depthMap", 0);
+    //debugDepthQuad.setInt("depthMap", 0);
 
     //  Lighting Info
     glm::vec3 lightPos(-2.0f, 4.0f, -1.0f);
+
+    std::vector<float> cascadesSplit;
+
+    for (int i = 0; i < static_cast<int>(m); ++i) {
+        float Cuniform = n + ((f - n) * ((static_cast<float>(i) /*+ 1.0f*/) / m));
+        float Clogarithmic = n * powf(f / n, (static_cast<float>(i) /*+ 1.0f*/) / m);
+        float c = lambda * Cuniform + (1 - lambda) * Clogarithmic;
+        C[i] = c;
+        std::cout << "C_" << i << " = " << c << std::endl;
+        cascadesSplit.push_back(c);
+    }
+
+    float near_plane = n, far_plane = f;
+    float aspectRatio = static_cast<float>(SCR_WIDTH)/static_cast<float>(SCR_HEIGHT);
 
     //  Render Loop
     while (!glfwWindowShouldClose(window))
@@ -401,34 +409,43 @@ int main() {
         glm::mat4 lightSpaceMatrix;
         std::vector<glm::mat4> lightMatrixCascArr;
 
-        float near_plane = n, far_plane = f;
+        glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::vec3 cameraDirection = glm::normalize(camera.Position);
+        glm::vec3 up(0.0f, 1.0f, 0.0f);
+        glm::vec3 right = glm::cross(cameraDirection, up);
+        glm::vec3 center = camera.Position;
 
-        //  Cascade Shadow Maps Calculations
-        for (int i = 0; i < static_cast<int>(m); ++i) {
-            float Cuniform = n + ((f - n) * ((static_cast<float>(i) /*+ 1.0f*/) / m));
-            float Clogarithmic = n * powf(f / n, (static_cast<float>(i) /*+ 1.0f*/) / m);
-            float c = lambda * Cuniform + (1 - lambda) * Clogarithmic;
-            C[i] = c;
-            std::cout << "C_" << i << " = " << c << std::endl;
-        }
         for (int i = 0; i < static_cast<int>(m); ++i)
         {
+            glm::vec3 centerFar = center + cameraDirection * C[i+1];
+            glm::vec3 centerNear = center + cameraDirection * C[i];
+            right = glm::normalize(right);
+            up = glm::normalize(glm::cross(right, cameraDirection));
+
             float frustrumHeightNear = 2.0f * C[i] * tanf(glm::radians(camera.Zoom));
             float frustrumWidthNear = frustrumHeightNear * (static_cast<float>(SCR_WIDTH) / static_cast<float>(SCR_HEIGHT));
-            glm::vec3 centerNear = camera.Position + (C[i]*camera.Front);
+            //glm::vec3 centerNear = camera.Position + (C[i]*(camera.Front));
             float frustrumHeightFar = 2.0f * C[i] * tanf(glm::radians(camera.Zoom));
             float frustrumWidthFar = frustrumHeightFar * (static_cast<float>(SCR_WIDTH) / static_cast<float>(SCR_HEIGHT));
-            glm::vec3 centerFar = camera.Position + (C[i+1]*camera.Front);
+            //glm::vec3 centerFar = camera.Position + (C[i+1]*(camera.Front));
 
-            glm::vec3 ntl = centerNear + (camera.Up * (frustrumHeightNear/2.0f)) - (camera.Right * (frustrumHeightNear)/2.0f);
-            glm::vec3 ntr = centerNear + (camera.Up * (frustrumHeightNear/2.0f)) + (camera.Right * (frustrumHeightNear)/2.0f);
-            glm::vec3 nbl = centerNear - (camera.Up * (frustrumHeightNear/2.0f)) - (camera.Right * (frustrumHeightNear)/2.0f);
-            glm::vec3 nbr = centerNear - (camera.Up * (frustrumHeightNear/2.0f)) + (camera.Right * (frustrumHeightNear)/2.0f);
+            //glm::vec3 ntl = centerNear + (camera.Up * (frustrumHeightNear/2.0f)) - (camera.Right * (frustrumWidthNear)/2.0f);
+            glm::vec3 ntl = centerNear + (up * (frustrumHeightNear/2.0f)) - (right * (frustrumWidthNear)/2.0f);
+            //glm::vec3 ntr = centerNear + (camera.Up * (frustrumHeightNear/2.0f)) + (camera.Right * (frustrumWidthNear)/2.0f);
+            glm::vec3 ntr = centerNear + (up * (frustrumHeightNear/2.0f)) + (right * (frustrumWidthNear)/2.0f);
+            //glm::vec3 nbl = centerNear - (camera.Up * (frustrumHeightNear/2.0f)) - (camera.Right * (frustrumWidthNear)/2.0f);
+            glm::vec3 nbl = centerNear - (up * (frustrumHeightNear/2.0f)) - (right * (frustrumWidthNear)/2.0f);
+            //glm::vec3 nbr = centerNear - (camera.Up * (frustrumHeightNear/2.0f)) + (camera.Right * (frustrumWidthNear)/2.0f);
+            glm::vec3 nbr = centerNear - (up * (frustrumHeightNear/2.0f)) + (right * (frustrumWidthNear)/2.0f);
 
-            glm::vec3 ftl = centerFar + (camera.Up * (frustrumHeightFar/2.0f)) - (camera.Right * (frustrumHeightFar)/2.0f);
-            glm::vec3 ftr = centerFar + (camera.Up * (frustrumHeightFar/2.0f)) + (camera.Right * (frustrumHeightFar)/2.0f);
-            glm::vec3 fbl = centerFar - (camera.Up * (frustrumHeightFar/2.0f)) - (camera.Right * (frustrumHeightFar)/2.0f);
-            glm::vec3 fbr = centerFar - (camera.Up * (frustrumHeightFar/2.0f)) + (camera.Right * (frustrumHeightFar)/2.0f);
+            //glm::vec3 ftl = centerFar + (camera.Up * (frustrumHeightFar/2.0f)) - (camera.Right * (frustrumWidthFar)/2.0f);
+            glm::vec3 ftl = centerFar + (up * (frustrumHeightFar/2.0f)) - (right * (frustrumWidthFar)/2.0f);
+            //glm::vec3 ftr = centerFar + (camera.Up * (frustrumHeightFar/2.0f)) + (camera.Right * (frustrumWidthFar)/2.0f);
+            glm::vec3 ftr = centerFar + (up * (frustrumHeightFar/2.0f)) + (right * (frustrumWidthFar)/2.0f);
+            //glm::vec3 fbl = centerFar - (camera.Up * (frustrumHeightFar/2.0f)) - (camera.Right * (frustrumWidthFar)/2.0f);
+            glm::vec3 fbl = centerFar - (up * (frustrumHeightFar/2.0f)) - (right * (frustrumWidthFar)/2.0f);
+            //glm::vec3 fbr = centerFar - (camera.Up * (frustrumHeightFar/2.0f)) + (camera.Right * (frustrumWidthFar)/2.0f);
+            glm::vec3 fbr = centerFar - (up * (frustrumHeightFar/2.0f)) + (right * (frustrumWidthFar)/2.0f);
 
             //  Frustrum Corners
             glm::vec4 bboxCorners[8];
@@ -441,13 +458,19 @@ int main() {
             bboxCorners[6] = glm::vec4(ftl, 0);
             bboxCorners[7] = glm::vec4(ftr, 0);
 
-            //  Transform corner vector by the cameras view model matrix
-            //for (auto &bboxCorner : bboxCorners) {
-            //    bboxCorner = glm::inverse(cameraViewMatrix) * bboxCorner;
-            //}
+            //  Transform corner vector by the cameras inverse view projection model matrix
+            glm::mat4 projectionMatr = glm::perspective( glm::radians(camera.Zoom), aspectRatio, near_plane, far_plane);
+            glm::mat4 invViewProj = glm::inverse(projectionMatr*cameraViewMatrix);
+            for (auto &bboxCorner : bboxCorners)
+            {
+                //bboxCorner = glm::inverse(cameraViewMatrix) * bboxCorner;
+                bboxCorner = invViewProj * bboxCorner;
+            }
 
-            glm::vec3 minVctr = glm::vec3(-frustrumWidthNear / 2, -frustrumHeightNear / 2, C[0]);
-            glm::vec3 maxVctr = glm::vec3(frustrumWidthFar / 2, frustrumHeightFar / 2, C[i + 1]);
+            //glm::vec3 minVctr = glm::vec3(-frustrumWidthNear / 2, -frustrumHeightNear / 2, C[0]);
+            glm::vec3 minVctr = glm::vec3(INFINITY, INFINITY, INFINITY);
+            //glm::vec3 maxVctr = glm::vec3(frustrumWidthFar / 2, frustrumHeightFar / 2, C[i + 1]);
+            glm::vec3 maxVctr = glm::vec3(-INFINITY, -INFINITY, -INFINITY);
 
             for (const auto &bboxCorner : bboxCorners) {
                 if (minVctr.x > bboxCorner.x) minVctr.x = bboxCorner.x;
@@ -470,26 +493,25 @@ int main() {
                                     0.0f, scaleY, 0.0f, offsetY,
                                     0.0f, 0.0f, scaleZ, offsetZ,
                                     0.0f, 0.0f, 0.0f, 1.0f};
-            /*glm::mat4 cropMatrix = {scaleX, 0.0f, 0.0f, 0.0f,
-                                    0.0f, scaleY, 0.0f, 0.0f,
-                                    0.0f, 0.0f, scaleZ, 0.0f,
-                                    offsetX, offsetY, offsetZ, 1.0f};*/
 
             //  1.  Render Depth of Scene to Texture from lights perspective
-            //float near_plane = 1.0f, far_plane = 7.5f;
-            //lightProjection = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, near_plane, far_plane);
-            lightProjection = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, n, f);
+            lightProjection = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, near_plane, far_plane);
+            //lightProjection = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, C[i], C[i+1]);
+            //lightProjection = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, n, f);
+            //lightProjection = glm::ortho(minVctr.x, maxVctr.x, minVctr.y, maxVctr.y, minVctr.z, maxVctr.z);
             lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0, 1.0, 0.0));
-            lightSpaceMatrix = lightProjection * lightView * cropMatrix;
+            //lightView = glm::lookAt(lightPos, frustumCenter, glm::vec3(0.0f, 0.0f, 1.0f));
+            lightSpaceMatrix = cropMatrix * lightProjection * lightView;
 
             lightMatrixCascArr.push_back(lightSpaceMatrix);
 
             //  Render Scene from lights point of view
             simpleDepthShader.use();
             simpleDepthShader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
+            //simpleDepthShader.setMultMat4("lightSpaceMatrix", lightMatrixCascArr, static_cast<int>(m));
 
             glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
-            glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
+            glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO[i]);
             glClear(GL_DEPTH_BUFFER_BIT);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, woodTexture);
@@ -500,21 +522,20 @@ int main() {
             glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-
             //  2.  Render Scene as normal using the generated depth/shadow map
             glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             shader.use();
             glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom),
                                                     (float) SCR_WIDTH / (float) SCR_HEIGHT,
-                                                    0.1f, 100.0f);
+                                                    1.0f, 100.0f);
             glm::mat4 view = camera.GetViewMatrix();
+            shader.setFloatArr("cascadesSplit", cascadesSplit);
             shader.setMat4("projection", projection);
             shader.setMat4("view", view);
             //  Set Light Uniforms
             shader.setVec3("viewPos", camera.Position);
             shader.setVec3("lightPos", lightPos);
-            //shader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
             shader.setMultMat4("lightSpaceMatrix", lightMatrixCascArr, static_cast<int>(m));
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, woodTexture);
@@ -523,16 +544,18 @@ int main() {
                 glActiveTexture(GL_TEXTURE1+i);
                 glBindTexture(GL_TEXTURE_2D, depthMap[i]);
             }
-            //glActiveTexture(GL_TEXTURE1);
-            //glBindTexture(GL_TEXTURE_2D, depthMap[0]);
             renderScene(shader);
 
             //  Render Depth map to Quad for Visual Debugging
-            //debugDepthQuad.use();
-            //debugDepthQuad.setFloat("near_plane", near_plane);
-            //debugDepthQuad.setFloat("far_plane", far_plane);
-            //glActiveTexture(GL_TEXTURE0);
-            //glBindTexture(GL_TEXTURE_2D, depthMap);
+            debugDepthQuad.use();
+            debugDepthQuad.setFloat("near_plane", near_plane);
+            debugDepthQuad.setFloat("far_plane", far_plane);
+            for (int i = 0; i < static_cast<int>(m); ++i)
+            {
+                glActiveTexture(GL_TEXTURE1+i);
+                glBindTexture(GL_TEXTURE_2D, depthMap[i]);
+            }
+            //renderQuad();
 
         //  glfw: swap buffers and poll IO events
         glfwSwapBuffers(window);
